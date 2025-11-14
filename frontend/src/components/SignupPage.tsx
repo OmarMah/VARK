@@ -1,41 +1,33 @@
 import { useState } from 'react';
-import { supabase, Student } from '../lib/supabase';
+import { Student } from '../types';
 
 interface SignupPageProps {
-  onSignupComplete: (studentId: string) => void;
+  onSignupComplete: (student: Student) => void;
 }
 
 export function SignupPage({ onSignupComplete }: SignupPageProps) {
-  const [formData, setFormData] = useState<Student>({
+  const [formData, setFormData] = useState<Omit<Student, 'id'>>({
     name: '',
     phone: '',
     email: ''
   });
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
-    try {
-      const { data, error } = await supabase
-        .from('students')
-        .insert([formData])
-        .select()
-        .maybeSingle();
-
-      if (error) throw error;
-      if (data) {
-        onSignupComplete(data.id);
-      }
-    } catch (err) {
-      setError('حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.');
-      console.error('Error:', err);
-    } finally {
-      setLoading(false);
+    if (!formData.name.trim() || !formData.phone.trim() || !formData.email.trim()) {
+      setError('يرجى تعبئة جميع الحقول المطلوبة.');
+      return;
     }
+
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2, 10);
+
+    onSignupComplete({ ...formData, id });
   };
 
   return (
@@ -104,15 +96,14 @@ export function SignupPage({ onSignupComplete }: SignupPageProps) {
 
           <button
             type="submit"
-            disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'جاري التسجيل...' : 'البدء بالاختبار'}
+            البدء بالاختبار
           </button>
         </form>
 
         <div className="mt-6 text-center text-sm text-gray-500">
-          <p>سيتم حفظ بياناتك بشكل آمن</p>
+          <p>سيتم استخدام بياناتك أثناء هذه الجلسة فقط</p>
         </div>
       </div>
     </div>

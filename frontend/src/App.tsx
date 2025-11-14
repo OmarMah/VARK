@@ -1,20 +1,21 @@
 import { useState } from 'react';
 import { SignupPage } from './components/SignupPage';
 import { ExamPage } from './components/ExamPage';
+import { Student } from './types';
 
 function App() {
-  const [studentId, setStudentId] = useState<string | null>(null);
+  const [student, setStudent] = useState<Student | null>(null);
 
-  const handleSignupComplete = (id: string) => {
-    setStudentId(id);
+  const handleSignupComplete = (newStudent: Student) => {
+    setStudent(newStudent);
   };
 
   return (
     <>
-      {!studentId ? (
+      {!student ? (
         <SignupPage onSignupComplete={handleSignupComplete} />
       ) : (
-        <ExamPage studentId={studentId} />
+        <ExamPage student={student} />
       )}
     </>
   );

@@ -1,21 +1,67 @@
 import { useState } from 'react';
-import { supabase } from '../lib/supabase';
 import { questions, answerKey } from '../data/questions';
 import { CheckCircle } from 'lucide-react';
+import { Student, ExamScores } from '../types';
+import { buildExamRecordPayload, saveExamRecord } from '../lib/googleSheets';
+
+const learningStyleLabels: Record<keyof ExamScores, string> = {
+  V: 'بصري',
+  A: 'سمعي',
+  R: 'قرائي',
+  K: 'حركي'
+};
+
+const summarizeDominantStyles = (scores: ExamScores) => {
+  const max = Math.max(scores.V, scores.A, scores.R, scores.K);
+
+  const dominantStyles = (Object.keys(scores) as Array<keyof ExamScores>).filter(
+    (key) => scores[key] === max
+  );
+
+  const dominantSet = new Set<keyof ExamScores>(dominantStyles);
+
+  const v_k_diff = Math.abs(scores.V - scores.K);
+
+  if (v_k_diff <= 2) {
+    if (dominantSet.has('V')) {
+      dominantSet.add('K');
+    }
+    if (dominantSet.has('K')) {
+      dominantSet.add('V');
+    }
+  }
+
+  const allKeys: (keyof ExamScores)[] = ['V', 'A', 'R', 'K'];
+  const finalDominantStyles = allKeys.filter(key => dominantSet.has(key));
+
+  return finalDominantStyles.map((key) => learningStyleLabels[key]).join(' / ');
+};
 
 interface ExamPageProps {
-  studentId: string;
+  student: Student;
 }
 
-export function ExamPage({ studentId }: ExamPageProps) {
+export function ExamPage({ student }: ExamPageProps) {
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState<{ [key: number]: string }>({});
+  const [answers, setAnswers] = useState<{ [key: number]: string[] }>({});
   const [loading, setLoading] = useState(false);
   const [completed, setCompleted] = useState(false);
-  const [results, setResults] = useState<{ V: number; A: number; R: number; K: number } | null>(null);
+  const [results, setResults] = useState<ExamScores | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
 
-  const handleAnswer = (answer: string) => {
-    setAnswers({ ...answers, [currentQuestion + 1]: answer });
+  const toggleAnswer = (answer: string) => {
+    const questionKey = currentQuestion + 1;
+    const currentAnswers = answers[questionKey] ?? [];
+    const exists = currentAnswers.includes(answer);
+    const updatedAnswers = exists
+      ? currentAnswers.filter((value) => value !== answer)
+      : [...currentAnswers, answer];
+
+    setAnswers({
+      ...answers,
+      [questionKey]: updatedAnswers
+    });
   };
 
   const handleNext = () => {
@@ -31,11 +77,13 @@ export function ExamPage({ studentId }: ExamPageProps) {
   };
 
   const calculateResults = () => {
-    const scores = { V: 0, A: 0, R: 0, K: 0 };
+    const scores: ExamScores = { V: 0, A: 0, R: 0, K: 0 };
 
-    Object.entries(answers).forEach(([questionNum, answer]) => {
-      const learningStyle = answerKey[parseInt(questionNum)][answer];
-      scores[learningStyle as keyof typeof scores]++;
+    Object.entries(answers).forEach(([questionNum, selectedAnswers]) => {
+      selectedAnswers.forEach((answer) => {
+        const learningStyle = answerKey[parseInt(questionNum)][answer];
+        scores[learningStyle as keyof ExamScores]++;
+      });
     });
 
     return scores;
@@ -43,53 +91,65 @@ export function ExamPage({ studentId }: ExamPageProps) {
 
   const handleSubmit = async () => {
     setLoading(true);
+    setSaveStatus('saving');
+    setSaveError('');
+
     try {
-      const examResponses = Object.entries(answers).map(([questionNum, answer]) => ({
-        student_id: studentId,
-        question_number: parseInt(questionNum),
-        answer: answer,
-        learning_style: answerKey[parseInt(questionNum)][answer]
-      }));
-
-      const { error } = await supabase
-        .from('exam_responses')
-        .insert(examResponses);
-
-      if (error) throw error;
-
       const scores = calculateResults();
+      const dominantStyle = summarizeDominantStyles(scores);
+
       setResults(scores);
       setCompleted(true);
+
+      const payload = buildExamRecordPayload(student, scores, dominantStyle);
+      await saveExamRecord(payload);
+      setSaveStatus('success');
     } catch (err) {
-      console.error('Error submitting exam:', err);
-      alert('حدث خطأ أثناء إرسال الإجابات. يرجى المحاولة مرة أخرى.');
+      console.error('Error saving exam record:', err);
+      setSaveStatus('error');
+      setSaveError(
+        err instanceof Error
+          ? err.message
+          : 'حدث خطأ غير متوقع أثناء حفظ النتائج.'
+      );
+      alert('حدث خطأ أثناء حفظ النتائج. يمكنك المحاولة مرة أخرى لاحقاً.');
     } finally {
       setLoading(false);
     }
   };
 
   const getMaxLearningStyle = () => {
-    if (!results) return '';
-    const max = Math.max(results.V, results.A, results.R, results.K);
-    const styles: string[] = [];
-    if (results.V === max) styles.push('بصري');
-    if (results.A === max) styles.push('سمعي');
-    if (results.R === max) styles.push('قرائي');
-    if (results.K === max) styles.push('حركي');
-    return styles.join(' / ');
+    if (!completed || !results) return '';
+    return summarizeDominantStyles(results);
   };
 
   if (completed && results) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-green-100 flex items-center justify-center p-4" dir="rtl">
         <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl">
+          {saveStatus === 'saving' && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg mb-6">
+              جارٍ حفظ نتائجك...
+            </div>
+          )}
+          {saveStatus === 'success' && (
+            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-6">
+              تم حفظ نتائجك بنجاح.
+            </div>
+          )}
+          {saveStatus === 'error' && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+              تعذر حفظ النتائج .
+              {saveError && <span className="block text-xs text-red-500 mt-2">التفاصيل: {saveError}</span>}
+            </div>
+          )}
           <div className="text-center mb-8">
             <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-gray-800 mb-2">
               تم إكمال الاختبار بنجاح
             </h1>
             <p className="text-gray-600">
-              شكراً لك على إكمال اختبار VARK
+              شكراً لك يا {student.name} على إكمال اختبار VARK
             </p>
           </div>
 
@@ -123,7 +183,11 @@ export function ExamPage({ studentId }: ExamPageProps) {
           </div>
 
           <div className="text-center text-sm text-gray-500">
-            <p>تم حفظ نتائجك بنجاح</p>
+            <p>
+              {saveStatus === 'success'
+                ? 'تم حفظ نسخة من النتائج الخاصة بك.'
+                : 'تم حساب نتائجك محلياً. إذا لم يتم حفظ البيانات، يمكنك المحاولة مرة أخرى لاحقاً.'}
+            </p>
           </div>
         </div>
       </div>
@@ -131,9 +195,11 @@ export function ExamPage({ studentId }: ExamPageProps) {
   }
 
   const question = questions[currentQuestion];
-  const progress = ((Object.keys(answers).length) / questions.length) * 100;
-  const isAnswered = answers[currentQuestion + 1] !== undefined;
-  const allAnswered = Object.keys(answers).length === questions.length;
+  const answeredQuestions = questions.filter((_, index) => (answers[index + 1]?.length ?? 0) > 0).length;
+  const progress = (answeredQuestions / questions.length) * 100;
+  const currentSelections = answers[currentQuestion + 1] ?? [];
+  const isAnswered = currentSelections.length > 0;
+  const allAnswered = answeredQuestions === questions.length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 p-4" dir="rtl">
@@ -162,30 +228,30 @@ export function ExamPage({ studentId }: ExamPageProps) {
             </h2>
 
             <div className="space-y-3">
-              {question.options.map((option) => (
+              {question.options.map((option) => {
+                const isSelected = currentSelections.includes(option.value);
+                return (
                 <button
                   key={option.value}
-                  onClick={() => handleAnswer(option.value)}
+                  type="button"
+                  onClick={() => toggleAnswer(option.value)}
                   className={`w-full text-right p-4 rounded-lg border-2 transition-all duration-200 ${
-                    answers[currentQuestion + 1] === option.value
+                    isSelected
                       ? 'border-blue-600 bg-blue-50 shadow-md'
                       : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
                   }`}
                 >
                   <div className="flex items-start">
                     <span className={`flex-shrink-0 w-6 h-6 rounded-full border-2 ml-3 flex items-center justify-center ${
-                      answers[currentQuestion + 1] === option.value
-                        ? 'border-blue-600 bg-blue-600'
-                        : 'border-gray-300'
+                      isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-300 text-gray-500'
                     }`}>
-                      {answers[currentQuestion + 1] === option.value && (
-                        <span className="w-2 h-2 bg-white rounded-full" />
-                      )}
+                      {isSelected ? '✓' : ''}
                     </span>
                     <span className="text-gray-700 leading-relaxed">{option.text}</span>
                   </div>
                 </button>
-              ))}
+              );
+              })}
             </div>
           </div>
 
