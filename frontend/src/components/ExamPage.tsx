@@ -12,29 +12,19 @@ const learningStyleLabels: Record<keyof ExamScores, string> = {
 };
 
 const summarizeDominantStyles = (scores: ExamScores) => {
-  const max = Math.max(scores.V, scores.A, scores.R, scores.K);
+  // 1. ترتيب الدرجات تنازلياً لمعرفة الأعلى
+  const sortedScores = (Object.entries(scores) as [keyof ExamScores, number][])
+    .sort(([, a], [, b]) => b - a);
 
-  const dominantStyles = (Object.keys(scores) as Array<keyof ExamScores>).filter(
-    (key) => scores[key] === max
-  );
+  const [first, second] = sortedScores;
 
-  const dominantSet = new Set<keyof ExamScores>(dominantStyles);
-
-  const v_k_diff = Math.abs(scores.V - scores.K);
-
-  if (v_k_diff <= 2) {
-    if (dominantSet.has('V')) {
-      dominantSet.add('K');
-    }
-    if (dominantSet.has('K')) {
-      dominantSet.add('V');
-    }
+  // 2. تطبيق قاعدة الفارق: إذا كان الفرق بين الأول والثاني 2 أو أكثر، فهو نمط أحادي
+  if (first[1] - second[1] >= 2) {
+    return learningStyleLabels[first[0]];
   }
 
-  const allKeys: (keyof ExamScores)[] = ['V', 'A', 'R', 'K'];
-  const finalDominantStyles = allKeys.filter(key => dominantSet.has(key));
-
-  return finalDominantStyles.map((key) => learningStyleLabels[key]).join(' / ');
+  // 3. إذا لم يتحقق شرط الفارق (أقل من 2)، يظهر كمتعدد الحواس (بصري/حركي) حسب قواعد الملف
+  return 'متعدد الحواس (بصري/حركي)';
 };
 
 interface ExamPageProps {
@@ -94,28 +84,16 @@ export function ExamPage({ student }: ExamPageProps) {
     setSaveStatus('saving');
     setSaveError('');
 
-    try {
-      const scores = calculateResults();
-      const dominantStyle = summarizeDominantStyles(scores);
+    const scores = calculateResults();
+    const dominantStyle = summarizeDominantStyles(scores);
 
-      setResults(scores);
-      setCompleted(true);
+    setResults(scores);
+    setCompleted(true);
 
-      const payload = buildExamRecordPayload(student, scores, dominantStyle);
-      await saveExamRecord(payload);
-      setSaveStatus('success');
-    } catch (err) {
-      console.error('Error saving exam record:', err);
-      setSaveStatus('error');
-      setSaveError(
-        err instanceof Error
-          ? err.message
-          : 'حدث خطأ غير متوقع أثناء حفظ النتائج.'
-      );
-      alert('حدث خطأ أثناء حفظ النتائج. يمكنك المحاولة مرة أخرى لاحقاً.');
-    } finally {
-      setLoading(false);
-    }
+    const payload = buildExamRecordPayload(student, scores, dominantStyle);
+    await saveExamRecord(payload);
+    setSaveStatus('success');
+    setLoading(false);
   };
 
   const getMaxLearningStyle = () => {
